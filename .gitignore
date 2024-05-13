@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments
+.env
+.venv/
+venv/
+project_venv/
+.python-version
+
+# Local model cache — models come from S3 at runtime, never from the repo
+models/
+*.tar.gz
+
+# Deployment artifacts
+.serverless/
+.zappa/
+
+# OS
+.DS_Store
