@@ -1,0 +1,92 @@
+# One command, no manual steps:
+#
+#   docker compose up
+#
+# It brings up a MinIO bucket standing in for S3, seeds it with a real spaCy model
+# (this is the "seed data" step - the API is useless without a model in the
+# bucket), then starts the API against it. The API code is byte-for-byte what runs
+# on Lambda; only S3_ENDPOINT_URL differs.
+
+name: nlp-aws-lambda-hosting
+
+x-s3-env: &s3-env
+  AWS_ACCESS_KEY_ID: minioadmin
+  AWS_SECRET_ACCESS_KEY: minioadmin
+  AWS_DEFAULT_REGION: us-east-1
+  S3_ENDPOINT_URL: http://minio:9000
+  S3_BUCKET: nlp-lambda-models
+  S3_PREFIX: models
+  SPACY_MODEL: en_core_web_sm-3.8.0
+
+services:
+  # Stands in for S3. Console on http://localhost:8322 (minioadmin/minioadmin).
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "8321:9000"
+      - "8322:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # Runs once: creates the bucket and uploads the model the API will fetch.
+  seed:
+    build: .
+    environment:
+      <<: *s3-env
+      MODEL_CACHE_DIR: /tmp/models
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        python - <<'PY'
+        import os, boto3, botocore
+        s3 = boto3.client("s3", endpoint_url=os.environ["S3_ENDPOINT_URL"])
+        bucket = os.environ["S3_BUCKET"]
+        try:
+            s3.head_bucket(Bucket=bucket)
+            print(f"bucket {bucket} already exists")
+        except botocore.exceptions.ClientError:
+            s3.create_bucket(Bucket=bucket)
+            print(f"created bucket {bucket}")
+        PY
+        python -m nlp_lambda.cli upload --dest /tmp/models
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    environment:
+      <<: *s3-env
+      MODEL_SOURCE: s3
+      MODEL_CACHE_DIR: /tmp/models
+      MAX_TEXT_CHARS: "100000"
+      MAX_BATCH_SIZE: "32"
+      LOG_LEVEL: INFO
+    ports:
+      - "8320:8320"
+    depends_on:
+      minio:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    # /tmp is a tmpfs here for the same reason it is ephemeral on Lambda: the
+    # model cache must be rebuildable from the bucket, never something you back up.
+    tmpfs:
+      - /tmp:size=512m
+    restart: unless-stopped
+
+volumes:
+  minio-data:
