@@ -9,6 +9,7 @@ with no AWS credentials in the environment.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import Counter
 from collections.abc import Iterable, Sequence
@@ -137,6 +138,9 @@ class NlpService:
     ) -> None:
         self._loader = loader
         self._nlp = None
+        # gunicorn runs this with several threads per worker; without the lock two
+        # requests racing a cold start would each spacy.load a full copy.
+        self._load_lock = threading.Lock()
         self.max_text_chars = max_text_chars
         self.max_batch_size = max_batch_size
         self.stats = ServiceStats()
@@ -147,18 +151,22 @@ class NlpService:
     def nlp(self):
         """The loaded pipeline. Loading happens on first use, never on import."""
 
-        if self._nlp is None:
-            started = time.perf_counter()
-            self._nlp = self._loader()
-            elapsed = time.perf_counter() - started
-            self.stats.model_loaded = True
-            self.stats.load_seconds = elapsed
-            logger.info(
-                "pipeline_loaded name=%s seconds=%.3f components=%s",
-                getattr(self._nlp, "meta", {}).get("name", "unknown"),
-                elapsed,
-                ",".join(self._nlp.pipe_names),
-            )
+        if self._nlp is not None:
+            return self._nlp
+        with self._load_lock:
+            if self._nlp is None:
+                started = time.perf_counter()
+                nlp = self._loader()
+                elapsed = time.perf_counter() - started
+                self.stats.model_loaded = True
+                self.stats.load_seconds = elapsed
+                logger.info(
+                    "pipeline_loaded name=%s seconds=%.3f components=%s",
+                    getattr(nlp, "meta", {}).get("name", "unknown"),
+                    elapsed,
+                    ",".join(nlp.pipe_names),
+                )
+                self._nlp = nlp
         return self._nlp
 
     @property

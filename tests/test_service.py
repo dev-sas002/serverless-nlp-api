@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from nlp_lambda.errors import ValidationError
@@ -27,6 +29,27 @@ def test_the_model_is_not_loaded_until_it_is_needed(blank_nlp):
     assert len(loads) == 1
 
 
+def test_concurrent_first_requests_load_the_model_once(blank_nlp):
+    loads = []
+    release = threading.Event()
+
+    def slow_loader():
+        loads.append(1)
+        release.wait(timeout=5)
+        return blank_nlp
+
+    service = NlpService(slow_loader)
+    workers = [threading.Thread(target=service.analyze, args=(["Madrid"],)) for _ in range(4)]
+    for worker in workers:
+        worker.start()
+    release.set()
+    for worker in workers:
+        worker.join(timeout=5)
+
+    assert not any(worker.is_alive() for worker in workers)
+    assert len(loads) == 1
+
+
 def test_entities_carry_label_and_offsets(service):
     (result,) = service.analyze(["Ada Lovelace lived in the UK"])
 
@@ -39,7 +62,8 @@ def test_entities_carry_label_and_offsets(service):
 def test_locations_are_ranked_by_frequency_not_first_appearance(service):
     """The original code named this 'sorted_by_num_appearances' but did not sort."""
 
-    text = "Spain then the UK then Spain and Spain again, the UK"
+    # The UK appears first, Spain more often: insertion order would put the UK first.
+    text = "the UK then Spain, then Spain and Spain again, the UK"
     (locations,) = service.analyze([text], analyzer="locations")
 
     assert locations == ["Spain", "the UK"]
