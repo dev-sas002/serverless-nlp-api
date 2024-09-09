@@ -2,37 +2,35 @@
 #
 #   docker compose up
 #
-# It brings up a MinIO bucket standing in for S3, seeds it with a real spaCy model
-# (this is the "seed data" step - the API is useless without a model in the
-# bucket), then starts the API against it. The API code is byte-for-byte what runs
-# on Lambda; only S3_ENDPOINT_URL differs.
+# It brings up a moto server standing in for S3, seeds it with a real spaCy model
+# (the API is useless without a model in the bucket), then starts the API against
+# it. The API code is what runs on Lambda; only S3_ENDPOINT_URL differs.
 
 name: nlp-aws-lambda-hosting
 
+# moto accepts any credentials; these only stop boto3 from looking for real ones.
 x-s3-env: &s3-env
-  AWS_ACCESS_KEY_ID: minioadmin
-  AWS_SECRET_ACCESS_KEY: minioadmin
+  AWS_ACCESS_KEY_ID: testing
+  AWS_SECRET_ACCESS_KEY: testing
   AWS_DEFAULT_REGION: us-east-1
-  S3_ENDPOINT_URL: http://minio:9000
+  S3_ENDPOINT_URL: http://s3:5000
   S3_BUCKET: nlp-lambda-models
   S3_PREFIX: models
   SPACY_MODEL: en_core_web_sm-3.8.0
 
 services:
-  # Stands in for S3. Console on http://localhost:8322 (minioadmin/minioadmin).
-  minio:
-    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+  # Stands in for S3. Buckets live in memory for the life of this container;
+  # every `docker compose up` re-runs the seed job.
+  s3:
+    image: motoserver/moto:5.2.5
     ports:
-      - "8321:9000"
-      - "8322:9001"
-    volumes:
-      - minio-data:/data
+      - "8321:5000"
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/moto-api/')
       interval: 5s
       timeout: 3s
       retries: 20
@@ -62,7 +60,7 @@ services:
         PY
         python -m nlp_lambda.cli upload --dest /tmp/models
     depends_on:
-      minio:
+      s3:
         condition: service_healthy
     restart: "no"
 
@@ -78,7 +76,7 @@ services:
     ports:
       - "8320:8320"
     depends_on:
-      minio:
+      s3:
         condition: service_healthy
       seed:
         condition: service_completed_successfully
@@ -87,6 +85,3 @@ services:
     tmpfs:
       - /tmp:size=512m
     restart: unless-stopped
-
-volumes:
-  minio-data:
