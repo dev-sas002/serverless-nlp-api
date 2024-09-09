@@ -9,6 +9,7 @@ of the model-download module, with the interesting variants commented out.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import logging
 import sys
@@ -95,7 +96,7 @@ def cmd_analyze(args, settings: Settings) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="nlp_lambda.cli", description=__doc__.splitlines()[0])
-    parser.add_argument("--model", help="model name, e.g. en_core_web_sm-3.7.1")
+    parser.add_argument("--model", help="model name, e.g. en_core_web_sm-3.8.0")
     sub = parser.add_subparsers(dest="command", required=True)
 
     download = sub.add_parser("download", help=cmd_download.__doc__)
@@ -123,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = Settings.from_env()
     if args.model:
-        settings = Settings(**{**settings.__dict__, "model_name": args.model})
+        settings = dataclasses.replace(settings, model_name=args.model)
     try:
         return args.func(args, settings)
     except NlpLambdaError as exc:
