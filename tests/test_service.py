@@ -142,6 +142,7 @@ def test_warm_up_reports_the_load_and_is_idempotent(service):
     assert first["already_warm"] is False
     assert second["already_warm"] is True
     assert first["load_seconds"] >= 0
+    assert first["load_seconds"] == round(first["load_seconds"], 3)
     assert "ner" in first["components"]
 
 

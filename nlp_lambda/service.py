@@ -185,7 +185,7 @@ class NlpService:
             "already_warm": was_loaded,
             "pipeline": getattr(nlp, "meta", {}).get("name"),
             "components": list(nlp.pipe_names),
-            "load_seconds": self.stats.load_seconds,
+            "load_seconds": round(self.stats.load_seconds, 3),
         }
 
     # -- work ------------------------------------------------------------------
