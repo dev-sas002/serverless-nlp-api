@@ -1,0 +1,36 @@
+{
+    "dev": {
+        "app_function": "app.app",
+        "project_name": "nlp-lambda-example",
+        "runtime": "python3.12",
+        "aws_region": "us-east-1",
+        "profile_name": "default",
+        "s3_bucket": "nlp-lambda-deployments",
+        "slim_handler": true,
+        "keep_warm": true,
+        "keep_warm_expression": "rate(4 minutes)",
+        "memory_size": 1024,
+        "timeout_seconds": 60,
+        "lambda_concurrency": 100,
+        "environment_variables": {
+            "MODEL_SOURCE": "s3",
+            "S3_BUCKET": "nlp-lambda-models",
+            "S3_PREFIX": "models",
+            "SPACY_MODEL": "en_core_web_sm-3.8.0",
+            "MODEL_CACHE_DIR": "/tmp/models",
+            "LOG_LEVEL": "INFO"
+        },
+        "exclude": [
+            "__pycache__",
+            "*.pyc",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".vscode",
+            "tests/*",
+            "docs/*",
+            "project_venv/*",
+            ".venv/*",
+            "*.tar.gz"
+        ]
+    }
+}
