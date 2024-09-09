@@ -40,6 +40,6 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=5 \
     CMD ["python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8320/health', timeout=2).status == 200 else 1)"]
 
 # One worker, several threads: the model is ~50-500 MB of resident memory and each
-# worker process would hold its own copy. See README, "Concurrency and memory".
+# worker process would hold its own copy. NlpService loads it once under a lock.
 CMD ["gunicorn", "--bind", "0.0.0.0:8320", "--workers", "1", "--threads", "4", \
      "--timeout", "120", "--access-logfile", "-", "app:app"]

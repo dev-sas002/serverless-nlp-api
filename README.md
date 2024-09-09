@@ -61,53 +61,87 @@ current S3 pricing, do not trust that sentence. `POST /warmup` returns `load_sec
 ## Running it
 
 ```bash
-docker compose up   # MinIO on 8321 (console 8322), a seeding job, then the API on 8320
+docker compose up   # moto's S3 server on 8321, a seeding job, then the API on 8320
 ```
 
-The seeding job creates the bucket and uploads a real model, because the API is useless without one.
+The seeding job creates the bucket and uploads `en_core_web_sm-3.8.0` (12.8 MB, fetched from the
+spaCy releases page), because the API is useless without a model. The S3 stand-in is
+[`moto`](https://github.com/getmoto/moto)'s server, the same emulator the tests use, and it keeps
+the bucket in memory, so every `up` re-seeds. The API container mounts a 512 MB tmpfs on `/tmp` to
+match Lambda's default ephemeral storage. Verified end to end on 2026-11-07: build, seed, healthy
+API, and the responses under "Calling it" below.
 
-> Status from this repo's own build report, verbatim: **Build verified: NOT RUN — deferred, RAM
-> constraint**, **Boot verified: NOT RUN — deferred, RAM constraint**. `docker compose config` was run
-> and parses; that is the only Docker verification performed. The stack was authored, not executed.
+Without Docker, on Python 3.12 (`.python-version`):
 
 ```bash
 python -m venv .venv && source .venv/bin/activate && pip install -r requirements-dev.txt
-pytest                                      # 67 tests
+pytest                                      # 71 tests
 MODEL_SOURCE=github MODEL_CACHE_DIR=/tmp/models python -m nlp_lambda.cli warm
 MODEL_SOURCE=local LOCAL_MODEL_ROOT=/tmp/models ./run_local.sh
 ```
 
+`warm` downloads the model from GitHub into `/tmp/models` and loads it exactly as a cold
+invocation would; `run_local.sh` then serves that copy on `127.0.0.1:8320`.
+
 No test reaches AWS and none downloads a model — `tests/conftest.py` scrubs credentials from the
 environment, S3 is `moto`'s `mock_aws`, pipelines are `spacy.blank("en")` plus an `entity_ruler`
-named `ner`, and the suite passes with an empty environment. `pipenv` works too, though the
-original `Pipfile` pinned Python 3.8 and `pipenv lock` refuses to start without that interpreter,
-so it was rewritten for 3.12 (§6 of the captured output). Deploying is `zappa deploy dev` once
-`nlp_lambda.cli download` and `upload` have put a model in the bucket. Every setting is optional
-and none is read at import time — `.env.example` lists them with defaults — and `MODEL_SOURCE`
-(`s3`, `local`, `github`) picks the adapter, so EFS or an internal artifact store is one class
-plus one `register_model_source` line.
+named `ner`, and the suite passes with an empty environment and no network. `tests/test_cold_start.py`
+drives the same path Lambda does: an app built from settings alone, a serialised pipeline in a
+mocked bucket, and a first request that has to fetch, unpack and load it. `pipenv` works too
+(`Pipfile.lock` is resolved for 3.12). Deploying is `zappa deploy dev` once `nlp_lambda.cli
+download` and `upload` have put a model in the bucket. Every setting is optional and none is read
+at import time — `.env.example` lists them with defaults — and `MODEL_SOURCE` (`s3`, `local`,
+`github`) picks the adapter, so EFS or an internal artifact store is one class plus one
+`register_model_source` line.
 
 ## Calling it
 
+Captured from the compose stack above:
+
 ```console
+$ curl -s localhost:8320/health
+{"analyzers":["entities","locations","noun_chunks"],"model":"en_core_web_sm-3.8.0",
+ "model_loaded":false,"model_source":"s3","status":"ok","version":"1.0.0"}
+
+$ curl -s -X POST localhost:8320/warmup
+{"already_warm":false,"components":["tok2vec","tagger","parser","attribute_ruler","lemmatizer","ner"],
+ "elapsed_seconds":1.086,"load_seconds":1.086,"pipeline":"core_web_sm"}
+
 $ curl -s -X POST localhost:8320/analyze -H 'Content-Type: application/json' \
     -d '{"text": "Ada Lovelace met Charles Babbage in London."}'
-{"analyzer": "entities", "count": 1, "results": [[
-  {"text": "Ada Lovelace",    "label": "PERSON", "start_char": 0,  "end_char": 12},
-  {"text": "Charles Babbage", "label": "PERSON", "start_char": 17, "end_char": 32},
-  {"text": "London",          "label": "GPE",    "start_char": 36, "end_char": 42}]]}
+{"analyzer":"entities","count":1,"results":[[
+  {"end_char":12,"label":"PERSON","start_char":0,"text":"Ada Lovelace"},
+  {"end_char":32,"label":"PERSON","start_char":17,"text":"Charles Babbage"},
+  {"end_char":42,"label":"GPE","start_char":36,"text":"London"}]]}
+
+$ curl -s -X POST localhost:8320/analyze -H 'Content-Type: application/json' \
+    -d '{"analyzer": "noun_chunks", "texts": ["The quick brown fox jumps over the lazy dog.",
+                                            "Lambda unpacks the model into /tmp."]}'
+{"analyzer":"noun_chunks","count":2,"results":[["The quick brown fox","the lazy dog"],
+                                               ["Lambda","the model","/tmp"]]}
+
+$ curl -s -X POST localhost:8320/find_locations -H 'Content-Type: application/json' \
+    -d '{"text": "From Paris to Berlin, then back to Paris and on to Rome."}'
+["Paris","Berlin","Rome"]
+
+$ curl -s -X POST localhost:8320/analyze -H 'Content-Type: application/json' -d '{"txt": "typo"}'
+{"detail":"request body must contain 'text' or 'texts'","error":"bad_request"}     # HTTP 400
 ```
+
+The `/warmup` above is the cold start inside that container: the log shows
+`model_cache miss ... seconds=0.294 bytes=15267634`, the rest is `spacy.load`. A second
+`/warmup` returns `"already_warm":true` and `"elapsed_seconds":0.0`.
 
 `analyzer` is one of `entities`, `locations`, `noun_chunks`; `texts` batches up to `MAX_BATCH_SIZE`
 documents through `nlp.pipe`. Each analyzer declares the components it needs and leaves the rest
 disabled: over a 32-document, 20,448-character batch, `ner` alone measured **2.47× faster** than the
-full pipeline (414.9 ms → 167.7 ms median) — reproduce with `python -m scripts.bench_pipeline`. Also
-`GET /health` (touches neither S3 nor the model), `POST /warmup`, and `POST /find_locations`, intact.
+full pipeline (414.9 ms → 167.7 ms median) — reproduce with `python -m scripts.bench_pipeline`.
+`GET /health` touches neither S3 nor the model, and `GET /` lists the routes and analyzers.
+A missing model object is a 503 that names the S3 key; a malformed body is a 400, never a 500.
 
 ## What was wrong with the original code
 
-The git history here was rebuilt, so none of this is checkable from a diff. What *is* checkable is
-that every fix carries a docstring at the site naming what it replaced:
+Every fix carries a docstring or comment at the site naming what it replaced:
 
 * **`find_locations(**json_payload)`** splatted every key of an untrusted request body into a Python
   call, so a typo in a key name was a `TypeError` and a 500 — and `SENTRY_DSN` plus an S3 model load
@@ -115,12 +149,15 @@ that every fix carries a docstring at the site naming what it replaced:
   `test_unexpected_keys_are_a_400_not_a_500`, `test_importing_app_needs_no_env_and_downloads_nothing`.
 * **`tarfile.extractall` with no member validation** — CVE-2007-4559, where a member named `../../x`
   writes outside the destination. `archive.safe_extract` checks members *and* link targets first,
-  then uses `filter="data"` where the interpreter has it. Pinned by
-  `test_path_traversal_member_is_rejected` and `test_absolute_path_member_is_rejected`.
+  then extracts with `filter="data"`. Pinned by `test_path_traversal_member_is_rejected` and
+  `test_absolute_path_member_is_rejected`.
 * **`locations_sorted_by_num_appearances` never sorted** — it returned `list(Counter(...).keys())`,
-  which is insertion order. It is `most_common()` now. The evidence for the original is the
-  docstring on `_locations` in `nlp_lambda/service.py`, not a test: the input in
-  `test_locations_are_ranked_by_frequency_not_first_appearance` would pass under insertion order too.
+  which is insertion order. It is `most_common()` now, pinned by
+  `test_locations_are_ranked_by_frequency_not_first_appearance`, whose input mentions the less
+  frequent place first.
+* **Concurrent cold requests each loaded the model.** gunicorn runs four threads per worker, and the
+  lazy `nlp` property had no lock, so a burst at startup could hold several copies of the pipeline
+  in memory. Pinned by `test_concurrent_first_requests_load_the_model_once`.
 
 ## Known gaps
 
@@ -130,10 +167,12 @@ that every fix carries a docstring at the site naming what it replaced:
   `zappa_settings.json` cannot raise Lambda ephemeral storage above the 512 MB `/tmp` default.
 * **No confidence scores** — spaCy's default NER does not expose one, and inventing a number would
   be worse — and **no authentication**, which whatever fronts the function is assumed to handle.
-* **The pins moved forward and had to**: Python 3.8 → 3.12, spaCy unpinned → `>=3.7,<4`,
-  `sentry-sdk==0.16.4` → optional `>=2.0`. No installable spaCy 3 loads the spaCy 2 model names the
-  original README used. Only `en_core_web_sm` and `_md` have been exercised, though any archive
-  should work.
+* **The pins moved forward and had to**: Python 3.8 → 3.12, spaCy unpinned → `>=3.8,<3.9` (the
+  `-3.8.0` model archives only load on 3.8), `sentry-sdk==0.16.4` → optional `>=2.0`. No
+  installable spaCy 3 loads the spaCy 2 model names the original README used. Only
+  `en_core_web_sm` and `_md` have been exercised, though any 3.8 archive should work.
+* **The compose S3 is an emulator.** `moto` speaks the S3 API but is not S3; IAM, latency and
+  eventual consistency are not modelled.
 
 ## Licence
 
