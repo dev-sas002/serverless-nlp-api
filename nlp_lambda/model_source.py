@@ -17,8 +17,9 @@ Nothing above this module knows which implementation it got.
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from nlp_lambda.archive import find_model_dir, safe_extract
 from nlp_lambda.config import Settings

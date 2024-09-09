@@ -23,9 +23,9 @@ def safe_extract(archive: Path, dest: Path) -> None:
     """Extract ``archive`` into ``dest``, refusing members that escape it.
 
     ``TarFile.extractall`` will happily write to ``../../etc/cron.d`` if the archive
-    says so (CVE-2007-4559). Python 3.12 defaults to the ``data`` filter, but this
-    project also targets 3.9-3.11 where the default is still the unsafe one, so the
-    check is made explicit instead of inherited.
+    says so (CVE-2007-4559). The ``data`` filter blocks that, but on 3.12 it is not
+    yet the default, and a rejected member mid-extraction leaves a partial tree; the
+    up-front scan refuses the whole archive before a single byte is written.
     """
 
     dest = dest.resolve()
@@ -41,10 +41,7 @@ def safe_extract(archive: Path, dest: Path) -> None:
                 link_target = (target.parent / member.linkname).resolve()
                 if link_target != dest and dest not in link_target.parents:
                     raise UnsafeArchiveError(f"archive link {member.name!r} points outside {dest}")
-        try:
-            tar.extractall(path=dest, filter="data")  # type: ignore[call-arg]
-        except TypeError:  # Python < 3.12 has no extraction filters
-            tar.extractall(path=dest)  # noqa: S202 - members validated above
+        tar.extractall(path=dest, filter="data")
 
 
 def _is_pipeline_dir(path: Path) -> bool:

@@ -12,9 +12,8 @@ import logging
 import threading
 import time
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Callable
 
 from nlp_lambda.errors import ValidationError
 

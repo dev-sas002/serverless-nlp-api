@@ -2,7 +2,7 @@
 name = "nlp-aws-lambda-hosting"
 version = "1.0.0"
 description = "Run spaCy NLP on AWS Lambda with the model in S3, not in the deployment package"
-requires-python = ">=3.9"
+requires-python = ">=3.12,<3.13"
 license = { file = "LICENSE" }
 dependencies = [
     "flask>=3.0,<4",
@@ -34,15 +34,10 @@ filterwarnings = ["error::DeprecationWarning:nlp_lambda.*"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM", "ARG", "RET"]
-ignore = [
-    # `from __future__ import annotations` makes PEP 604 syntax safe on 3.9.
-    "UP007",
-    "UP045",
-]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["ARG001", "ARG002", "ARG005"]

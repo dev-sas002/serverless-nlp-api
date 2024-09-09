@@ -14,7 +14,6 @@ htmlcov/
 .venv/
 venv/
 project_venv/
-.python-version
 
 # Local model cache — models come from S3 at runtime, never from the repo
 models/
